@@ -81,6 +81,13 @@ export interface LoadingProgressState {
   phase: string
 }
 
+export interface DirNode {
+  name: string
+  path: string
+  modelCount: number
+  children?: DirNode[]
+}
+
 const initialLoadingState: LoadingProgressState = {
   isVisible: false,
   message: '',
@@ -166,10 +173,21 @@ interface ModelStore {
   selectedFileIndex: number
   fileSortMode: FileSortMode
   sortOrder: SortOrder
-  setFolderFiles: (folderPath: string | null, files: { name: string; path: string; mtimeMs: number }[]) => void
+
+  dirTree: DirNode | null
+  dirNavHistory: string[]
+  recursiveScan: boolean
+  activeDirFilter: string | null
+
+  setFolderFiles: (folderPath: string | null, files: { name: string; path: string; mtimeMs: number }[], tree?: DirNode | null,) => void
   setSelectedFileIndex: (index: number) => void
   setFileSortMode: (mode: FileSortMode) => void
   setSortOrder: (order: SortOrder) => void
+
+  navigateToDirectory: (path: string) => void
+  goBackDirectory: () => void
+  setRecursiveScan: (enabled: boolean) => void
+  setActiveDirFilter: (path: string | null) => void
 
   setGLBUrl: (url: string) => void
   setModelVersion: (v: number) => void
@@ -334,6 +352,11 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
   fileSortMode: 'name',
   sortOrder: 'asc',
 
+  dirTree: null,
+  dirNavHistory: [],
+  recursiveScan: false,
+  activeDirFilter: null,
+
   // Multi-file state
   loadedFiles: [],
   activeFileId: null,
@@ -381,7 +404,7 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
   setModelCenteringOffset: (offset) => set({ modelCenteringOffset: offset }),
   setActiveUpAxis: (axis) => set({ activeUpAxis: axis }),
 
-  setFolderFiles: (folderPath, files) => {
+  setFolderFiles: (folderPath, files, tree) => {
     const state = get()
     // Skip if both the folder path and file list are identical —
     // avoids cascading re-renders in FileListPanel that would
@@ -395,11 +418,42 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
     ) {
       return
     }
-    set({ currentFolderPath: folderPath, folderFiles: files, selectedFileIndex: -1 })
+    set({ currentFolderPath: folderPath, folderFiles: files, selectedFileIndex: -1, dirTree: tree ?? state.dirTree, activeDirFilter: null,})
   },
   setSelectedFileIndex: (index) => set({ selectedFileIndex: index }),
   setFileSortMode: (mode) => set({ fileSortMode: mode }),
   setSortOrder: (order) => set({ sortOrder: order }),
+
+  navigateToDirectory: (path) => {
+    const state = get()
+    // 把当前路径压入历史栈（如果存在且不同于目标）
+    if (state.currentFolderPath && state.currentFolderPath !== path) {
+      set({ dirNavHistory: [...state.dirNavHistory, state.currentFolderPath] })
+    }
+    // 注意：实际的 readDirectory 调用由 FileListPanel 组件触发
+    // 这里只管状态，不做 IPC 调用
+    set({ activeDirFilter: null })
+  },
+  
+  goBackDirectory: () => {
+    const state = get()
+    if (state.dirNavHistory.length === 0) return
+    const prevPath = state.dirNavHistory[state.dirNavHistory.length - 1]
+    set({
+      dirNavHistory: state.dirNavHistory.slice(0, -1),
+      activeDirFilter: null,
+    })
+    // 返回上一个路径，同样由 FileListPanel 监听后触发 readDirectory
+    // 也可以在这里直接返回 prevPath 供调用方使用
+  },
+  
+  setRecursiveScan: (enabled) => {
+    set({ recursiveScan: enabled })
+  },
+  
+  setActiveDirFilter: (path) => {
+    set({ activeDirFilter: path })
+  },
 
   setGLBUrl: (url) => {
     if (get().glbUrl) URL.revokeObjectURL(get().glbUrl!)
@@ -459,6 +513,10 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
       glbPartInfos: [], modelCenteringOffset: null, isConverting: false, loadingState: initialLoadingState,
       fileSortMode: 'name', sortOrder: 'asc', activeUpAxis: 'z',
       loadedFiles: [], activeFileId: null,
+      dirTree: null,
+      dirNavHistory: [],
+      recursiveScan: false,
+      activeDirFilter: null,
     })
   },
 
