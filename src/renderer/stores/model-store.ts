@@ -178,8 +178,9 @@ interface ModelStore {
   dirNavHistory: string[]
   recursiveScan: boolean
   activeDirFilter: string | null
+  pathSep: '/'
 
-  setFolderFiles: (folderPath: string | null, files: { name: string; path: string; mtimeMs: number }[], tree?: DirNode | null,) => void
+  setFolderFiles: (folderPath: string | null, files: { name: string; path: string; mtimeMs: number }[], tree?: DirNode | null, pathSep?: string) => void
   setSelectedFileIndex: (index: number) => void
   setFileSortMode: (mode: FileSortMode) => void
   setSortOrder: (order: SortOrder) => void
@@ -404,7 +405,7 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
   setModelCenteringOffset: (offset) => set({ modelCenteringOffset: offset }),
   setActiveUpAxis: (axis) => set({ activeUpAxis: axis }),
 
-  setFolderFiles: (folderPath, files, tree) => {
+  setFolderFiles: (folderPath, files, tree, pathSep) => {
     const state = get()
     // Skip if both the folder path and file list are identical —
     // avoids cascading re-renders in FileListPanel that would
@@ -418,7 +419,7 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
     ) {
       return
     }
-    set({ currentFolderPath: folderPath, folderFiles: files, selectedFileIndex: -1, dirTree: tree ?? state.dirTree, activeDirFilter: null,})
+    set({ currentFolderPath: folderPath, folderFiles: files, selectedFileIndex: -1, dirTree: tree ?? state.dirTree, activeDirFilter: null, pathSep: pathSep ?? state.pathSep})
   },
   setSelectedFileIndex: (index) => set({ selectedFileIndex: index }),
   setFileSortMode: (mode) => set({ fileSortMode: mode }),

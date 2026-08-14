@@ -2,13 +2,14 @@ import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useModelStore, type FileSortMode } from '@/stores/model-store'
+import type { DirNode } from '@/stores/model-store'
 import { useUIStore } from '@/stores/ui-store'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { startPreCache } from '@/lib/step-converter'
 import { EXT_COLORS } from '@/config/file-formats'
 import { Button } from '@/components/ui/button'
-import { List, ArrowUpAZ, ArrowDownZA, AlertCircle, Eye, EyeOff, Loader2, Maximize2, Minimize2, Folder } from 'lucide-react'
+import { List, ArrowUpAZ, ArrowDownZA, AlertCircle, Eye, EyeOff, Loader2, Maximize2, Minimize2, Folder, ChevronLeft, ChevronRight, ChevronDown, FolderSearch } from 'lucide-react'
 import { toggleFileInScene, replaceSceneWithFile } from '@/lib/scene-file-loader'
 import {
   startThumbnailQueue,
@@ -41,6 +42,16 @@ export default function FileListPanel() {
     setFileSortMode,
     setSortOrder,
     loadedFiles,
+    dirTree,
+    dirNavHistory,
+    recursiveScan,
+    activeDirFilter,
+    pathSep,
+    setFolderFiles,
+    navigateToDirectory,
+    goBackDirectory,
+    setRecursiveScan,
+    setActiveDirFilter,
   } = useModelStore()
   const enablePreview = useUIStore((s) => s.enablePreview)
   const setEnablePreview = useUIStore((s) => s.setEnablePreview)
@@ -256,6 +267,68 @@ export default function FileListPanel() {
     return files
   }, [folderFiles, fileSortMode, sortOrder])
 
+  const pathSegments = useMemo(() => {
+    if (!currentFolderPath) return []
+    const parts = currentFolderPath.split(/[/\\]/).filter(Boolean)
+    let acc = ''
+    return parts.map(name => {
+      acc = acc ? acc + pathSep + name : name
+      if (/^[A-Za-z]:$/.test(acc)) acc += pathSep
+      return { name, path: acc }
+    })
+  }, [currentFolderPath, pathSep])
+  
+  const displayedFiles = useMemo(() => {
+    if (!activeDirFilter) return sortedFiles
+    const prefix = activeDirFilter + pathSep
+    return sortedFiles.filter(f => f.path.startsWith(prefix))
+  }, [sortedFiles, activeDirFilter, pathSep])
+  
+  const handleGoBack = useCallback(async () => {
+    if (dirNavHistory.length === 0) return
+    const prevPath = dirNavHistory[dirNavHistory.length - 1]
+    goBackDirectory()
+    const result = await window.electronAPI.readDirectory(prevPath, recursiveScan)
+    if (result.success && result.files) {
+      setFolderFiles(prevPath, result.files, result.tree, result.pathSep)
+    }
+  }, [dirNavHistory, recursiveScan, goBackDirectory, setFolderFiles])
+  
+  const handleToggleRecursive = useCallback(async () => {
+    const next = !recursiveScan
+    setRecursiveScan(next)
+    if (!currentFolderPath) return
+    const result = await window.electronAPI.readDirectory(currentFolderPath, next)
+    if (result.success && result.files) {
+      setFolderFiles(currentFolderPath, result.files, result.tree, result.pathSep)
+    }
+  }, [recursiveScan, currentFolderPath, setRecursiveScan, setFolderFiles])
+  
+  const handleDirNodeClick = useCallback(async (dirPath: string) => {
+    if (dirPath === currentFolderPath) {
+      setActiveDirFilter(activeDirFilter === dirPath ? null : dirPath)
+      return
+    }
+    navigateToDirectory(dirPath)
+    const result = await window.electronAPI.readDirectory(dirPath, recursiveScan)
+    if (result.success && result.files) {
+      setFolderFiles(dirPath, result.files, result.tree, result.pathSep)
+    }
+    setActiveDirFilter(null)
+  }, [currentFolderPath, recursiveScan, activeDirFilter, navigateToDirectory,
+      setFolderFiles, setActiveDirFilter])
+  
+  const handleBreadcrumbClick = useCallback(async (path: string) => {
+    if (path === currentFolderPath) return
+    navigateToDirectory(path)
+    const result = await window.electronAPI.readDirectory(path, recursiveScan)
+    if (result.success && result.files) {
+      setFolderFiles(path, result.files, result.tree, result.pathSep)
+    }
+    setActiveDirFilter(null)
+  }, [currentFolderPath, recursiveScan, navigateToDirectory, setFolderFiles,
+      setActiveDirFilter])
+
   function cycleSortMode() {
     const next: FileSortMode = fileSortMode === 'name' ? 'type+name' : 'name'
     setFileSortMode(next)
@@ -271,7 +344,7 @@ export default function FileListPanel() {
         <span className="shrink-0">{t('fileList.title')}</span>
         {enablePreview && folderFiles.length > 0 && (
           <span className="text-[10px] text-muted-foreground/60 truncate min-w-0">
-            {thumbState.urls.size + thumbState.failed.size}/{folderFiles.length}
+            {thumbState.urls.size + thumbState.failed.size}/{displayedFiles.length}
             {processingPath && (
               <span className="text-muted-foreground/80" title={processingPath}>
                 {' — ' + (processingPath.split(/[/\\]/).pop() || '')}
@@ -330,17 +403,73 @@ export default function FileListPanel() {
       </div>
 
       {currentFolderPath && (
-        <ScrollArea className="border-b">
-          <div
-            className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap min-w-max flex items-center gap-1.5 cursor-pointer hover:text-foreground transition-colors"
-            onClick={handleFolderClick}
-            title={t('fileList.switchFolder')}
-          >
-            <Folder className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0">{currentFolderPath}</span>
+        <div className="border-b">
+          {/* 导航栏：回退 + 面包屑 + 计数 + 递归开关 */}
+          <div className="px-2 py-1 flex items-center gap-1 text-xs">
+            {/* 回退按钮 */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5 shrink-0"
+              disabled={dirNavHistory.length === 0}
+              onClick={handleGoBack}
+              title={t('fileList.goBack')}
+            >
+              <ChevronLeft className="h-3 w-3" />
+            </Button>
+      
+            {/* 面包屑路径 */}
+            <div className="flex items-center gap-0.5 min-w-0 overflow-hidden">
+              {pathSegments.map((seg, i) => (
+                <span key={i} className="flex items-center gap-0.5 min-w-0">
+                  {i > 0 && <span className="text-muted-foreground/40">/</span>}
+                  <span
+                    className={cn(
+                      'cursor-pointer hover:text-foreground transition-colors truncate',
+                      i === pathSegments.length - 1
+                        ? 'text-foreground font-medium'
+                        : 'text-muted-foreground',
+                    )}
+                    onClick={() => handleBreadcrumbClick(seg.path)}
+                  >
+                    {seg.name}
+                  </span>
+                </span>
+              ))}
+            </div>
+      
+            {/* 模型计数 */}
+            <span className="ml-auto text-muted-foreground/60 shrink-0">
+              {t('fileList.modelCount', { count: displayedFiles.length })}
+            </span>
+      
+            {/* 递归扫描开关 */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5 shrink-0"
+              onClick={handleToggleRecursive}
+              title={recursiveScan
+                ? t('fileList.currentDirOnly')
+                : t('fileList.recursiveScan')}
+            >
+              <FolderSearch className={cn('h-3 w-3', recursiveScan && 'text-primary')} />
+            </Button>
           </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
+      
+          {/* 目录树（仅递归模式且有子目录时显示） */}
+          {recursiveScan && dirTree?.children && dirTree.children.length > 0 && (
+            <div className="max-h-40 overflow-y-auto border-t">
+              <DirTreeNode
+                node={dirTree}
+                currentPath={currentFolderPath}
+                pathSep={pathSep}
+                onDirClick={handleDirNodeClick}
+                depth={0}
+              />
+            </div>
+          )}
+        </div>
       )}
       {currentFolderPath === null && folderFiles.length > 0 && (
         <div className="px-3 py-1.5 text-xs text-muted-foreground border-b flex items-center gap-1.5">
@@ -349,10 +478,12 @@ export default function FileListPanel() {
         </div>
       )}
 
-      {folderFiles.length === 0 ? (
+      {displayedFiles.length === 0 ? (
         <ScrollArea className="flex-1 p-4">
           <p className="text-xs text-muted-foreground text-center py-8">
-            {currentFolderPath ? t('fileList.noModels') : t('fileList.empty')}
+            {currentFolderPath
+              ? t('fileList.noModels')
+              : t('fileList.empty')}
           </p>
         </ScrollArea>
       ) : (
@@ -364,7 +495,7 @@ export default function FileListPanel() {
             className="p-2 grid gap-2"
             style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}
           >
-            {sortedFiles.map((file, i) => {
+            {displayedFiles.map((file, i) => {
               const isSelected = i === selectedFileIndex
               const isCurrent = loadedFilePaths.has(file.path)
               const thumbUrl = thumbState.urls.get(file.path)
@@ -436,7 +567,7 @@ export default function FileListPanel() {
       ) : (
         <ScrollArea className="flex-1">
           <div ref={listRef} className="p-2 min-w-max">
-            {sortedFiles.map((file, i) => {
+            {displayedFiles.map((file, i) => {
               const isSelected = i === selectedFileIndex
               const isCurrent = loadedFilePaths.has(file.path)
               const ext = getExt(file.name)
@@ -707,6 +838,63 @@ function FullscreenGrid({
           })}
         </div>
       </ScrollArea>
+    </div>
+  )
+}
+
+function DirTreeNode({
+  node,
+  currentPath,
+  pathSep,
+  onDirClick,
+  depth,
+}: {
+  node: DirNode
+  currentPath: string | null
+  pathSep: string
+  onDirClick: (path: string) => void
+  depth: number
+}) {
+  const [open, setOpen] = useState(depth === 0)
+  const isActive = node.path === currentPath
+  const hasChildren = node.children && node.children.length > 0
+ 
+  return (
+    <div>
+      <div
+        className={cn(
+          'flex items-center gap-1 cursor-pointer hover:bg-accent rounded px-1 py-0.5 text-xs',
+          isActive && 'bg-accent text-accent-foreground',
+        )}
+        style={{ paddingLeft: `${depth * 12 + 4}px` }}
+        onClick={() => {
+          if (hasChildren) setOpen(!open)
+          onDirClick(node.path)
+        }}
+      >
+        {hasChildren ? (
+          open
+            ? <ChevronDown className="h-3 w-3 shrink-0" />
+            : <ChevronRight className="h-3 w-3 shrink-0" />
+        ) : (
+          <span className="w-3 inline-block shrink-0" />
+        )}
+        <Folder className="h-3 w-3 shrink-0" />
+        <span className="truncate min-w-0">{node.name}</span>
+        <span className="ml-auto text-muted-foreground/60 shrink-0">
+          {node.modelCount}
+        </span>
+      </div>
+      {open && hasChildren && node.children!.map(child => (
+        <DirTreeNode
+          key={child.path}
+          node={child}
+          currentPath={currentPath}
+          pathSep={pathSep}
+          onDirClick={onDirClick}
+          depth={depth + 1}
+        />
+      ))}
     </div>
   )
 }

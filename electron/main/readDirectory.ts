@@ -1,4 +1,4 @@
-import { join, extname, basename } from 'path'
+import { join, extname, basename, sep } from 'path'
 import * as fs from 'fs'
 import { ALL_MODEL_EXTENSIONS } from '../../src/renderer/config/file-formats'
 
@@ -19,7 +19,7 @@ const SUPPORTED_EXTENSIONS = new Set(ALL_MODEL_EXTENSIONS)
 
 export async function readDirectory(dirPath: string, recursive: boolean = false,
   maxDepth: number = 5,
-  _depth: number = 0,): Promise<{ success: boolean; files?: FileEntry[]; tree?: DirNode; error?: string }> {
+  _depth: number = 0,): Promise<{ success: boolean; files?: FileEntry[]; tree?: DirNode; pathSep?: string; error?: string }> {
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true })
     const files: FileEntry[] = []
@@ -51,7 +51,7 @@ export async function readDirectory(dirPath: string, recursive: boolean = false,
       children: childDirs.length > 0 ? childDirs : undefined,
     }
  
-    return { success: true, files, tree }
+    return { success: true, files, tree, pathSep: sep }
   } catch (e) {
     return { success: false, error: (e as Error).message }
   }
